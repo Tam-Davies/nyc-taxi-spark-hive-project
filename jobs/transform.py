@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import to_timestamp, col
 
@@ -27,8 +29,7 @@ df = (
     .csv(input_path)
 )
 
-
-print("=== RAW SCHEMA ===")
+print("\n=== RAW SCHEMA ===")
 df.printSchema()
 
 
@@ -36,8 +37,8 @@ df.printSchema()
 # 3. REMOVE UNNECESSARY COLUMN
 # ============================================================
 
-# The original CSV contains an extra index-like column called _c0.
-# It is not part of the actual taxi data.
+# _c0 is an extra index-like column from the CSV.
+# It is not part of the taxi trip information.
 
 df = df.drop("_c0")
 
@@ -65,7 +66,7 @@ df = (
 
 
 # ============================================================
-# 5. SELECT COLUMNS FOR THE CLEAN DATASET
+# 5. SELECT ANALYTICAL COLUMNS
 # ============================================================
 
 df = df.select(
@@ -90,7 +91,7 @@ df = df.select(
 
 
 # ============================================================
-# 6. DATA QUALITY CHECKS
+# 6. DATA QUALITY PROFILING
 # ============================================================
 
 print("\n=== DATA QUALITY SUMMARY ===")
@@ -129,114 +130,91 @@ print("Dropoff before pickup:", invalid_datetime_order)
 
 
 # ============================================================
-# 7. INSPECT INVALID TRIP DISTANCES
+# 7. DEFINE WHAT COUNTS AS A VALID TRIP
 # ============================================================
 
-print("\n=== RECORDS WITH ZERO OR NEGATIVE TRIP DISTANCE ===")
+# A valid analytical trip must satisfy all of these rules:
+#
+# 1. Pickup timestamp exists
+# 2. Dropoff timestamp exists
+# 3. Trip distance is greater than zero
+# 4. Passenger count is greater than zero
+# 5. Fare amount is greater than zero
+# 6. Dropoff occurs at or after pickup
 
-df.filter(
-    col("trip_distance") <= 0
-).select(
-    "VendorID",
-    "pickup_datetime",
-    "dropoff_datetime",
-    "passenger_count",
-    "trip_distance",
-    "PULocationID",
-    "DOLocationID",
-    "fare_amount",
-    "total_amount"
-).show(20, truncate=False)
-
-
-# ============================================================
-# 8. INSPECT INVALID PASSENGER COUNTS
-# ============================================================
-
-print("\n=== RECORDS WITH ZERO OR NEGATIVE PASSENGER COUNT ===")
-
-df.filter(
-    col("passenger_count") <= 0
-).select(
-    "VendorID",
-    "pickup_datetime",
-    "dropoff_datetime",
-    "passenger_count",
-    "trip_distance",
-    "fare_amount",
-    "total_amount"
-).show(20, truncate=False)
+valid_trip = (
+    col("pickup_datetime").isNotNull()
+    & col("dropoff_datetime").isNotNull()
+    & (col("trip_distance") > 0)
+    & (col("passenger_count") > 0)
+    & (col("fare_amount") > 0)
+    & (col("dropoff_datetime") >= col("pickup_datetime"))
+)
 
 
 # ============================================================
-# 9. INSPECT INVALID FARES
+# 8. CREATE CLEAN DATASET
 # ============================================================
 
-print("\n=== RECORDS WITH ZERO OR NEGATIVE FARE ===")
-
-df.filter(
-    col("fare_amount") <= 0
-).select(
-    "VendorID",
-    "pickup_datetime",
-    "dropoff_datetime",
-    "passenger_count",
-    "trip_distance",
-    "fare_amount",
-    "total_amount"
-).show(20, truncate=False)
+clean_df = df.filter(valid_trip)
 
 
 # ============================================================
-# 10. INSPECT INVALID DATETIME ORDER
+# 9. COMPARE BEFORE AND AFTER CLEANING
 # ============================================================
 
-print("\n=== RECORDS WHERE DROPOFF IS BEFORE PICKUP ===")
+raw_count = df.count()
+clean_count = clean_df.count()
+removed_count = raw_count - clean_count
 
-df.filter(
-    col("dropoff_datetime") < col("pickup_datetime")
-).select(
-    "VendorID",
-    "pickup_datetime",
-    "dropoff_datetime",
-    "passenger_count",
-    "trip_distance",
-    "fare_amount",
-    "total_amount"
-).show(20, truncate=False)
+print("\n=== CLEANING RESULTS ===")
+print("Records before cleaning:", raw_count)
+print("Records after cleaning:", clean_count)
+print("Records removed:", removed_count)
 
 
 # ============================================================
-# 11. DISPLAY TRANSFORMED SCHEMA
+# 10. SHOW CLEAN DATA
 # ============================================================
 
-print("\n=== TRANSFORMED SCHEMA ===")
-df.printSchema()
+print("\n=== CLEAN DATA SAMPLE ===")
 
-
-# ============================================================
-# 12. DISPLAY SAMPLE TRANSFORMED DATA
-# ============================================================
-
-print("\n=== TRANSFORMED DATA ===")
-
-df.show(
+clean_df.show(
     10,
     truncate=False
 )
 
 
 # ============================================================
-# 13. RECORD COUNT
+# 11. SHOW CLEAN DATA SCHEMA
 # ============================================================
 
-print("\n=== RECORD COUNT ===")
+print("\n=== CLEAN DATA SCHEMA ===")
 
-print(df.count())
+clean_df.printSchema()
 
 
 # ============================================================
-# 14. STOP SPARK
+# 12. WRITE CLEAN DATA AS PARQUET
+# ============================================================
+
+output_path = Path(
+    "data/processed/clean_trips"
+).resolve()
+
+print("\n=== WRITING PARQUET ===")
+print("Output path:", output_path)
+
+clean_df.write \
+    .mode("overwrite") \
+    .parquet(str(output_path))
+
+
+print("\n=== PARQUET WRITE COMPLETE ===")
+
+
+# ============================================================
+# 13. STOP SPARK
 # ============================================================
 
 spark.stop()
