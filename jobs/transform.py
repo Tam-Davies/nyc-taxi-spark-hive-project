@@ -1,6 +1,11 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import to_timestamp, col
 
+
+# ============================================================
+# 1. CREATE SPARK SESSION
+# ============================================================
+
 spark = (
     SparkSession.builder
     .appName("NYCTaxiTransformation")
@@ -8,11 +13,12 @@ spark = (
     .getOrCreate()
 )
 
-input_path = "data/raw/2017.csv"
 
 # ============================================================
-# 1. READ RAW DATA
+# 2. READ RAW DATA
 # ============================================================
+
+input_path = "data/raw/2017.csv"
 
 df = (
     spark.read
@@ -21,19 +27,23 @@ df = (
     .csv(input_path)
 )
 
+
 print("=== RAW SCHEMA ===")
 df.printSchema()
 
 
 # ============================================================
-# 2. REMOVE UNNECESSARY COLUMN
+# 3. REMOVE UNNECESSARY COLUMN
 # ============================================================
+
+# The original CSV contains an extra index-like column called _c0.
+# It is not part of the actual taxi data.
 
 df = df.drop("_c0")
 
 
 # ============================================================
-# 3. CONVERT DATETIME COLUMNS
+# 4. CONVERT DATETIME COLUMNS
 # ============================================================
 
 df = (
@@ -55,7 +65,7 @@ df = (
 
 
 # ============================================================
-# 4. SELECT COLUMNS FOR THE CLEAN DATASET
+# 5. SELECT COLUMNS FOR THE CLEAN DATASET
 # ============================================================
 
 df = df.select(
@@ -80,70 +90,153 @@ df = df.select(
 
 
 # ============================================================
-# 5. DATA QUALITY CHECKS
+# 6. DATA QUALITY CHECKS
 # ============================================================
 
-print("=== DATA QUALITY CHECKS ===")
+print("\n=== DATA QUALITY SUMMARY ===")
 
-print("Null pickup timestamps:")
-print(
-    df.filter(
-        col("pickup_datetime").isNull()
-    ).count()
-)
+null_pickup = df.filter(
+    col("pickup_datetime").isNull()
+).count()
 
-print("Null dropoff timestamps:")
-print(
-    df.filter(
-        col("dropoff_datetime").isNull()
-    ).count()
-)
+null_dropoff = df.filter(
+    col("dropoff_datetime").isNull()
+).count()
 
-print("Zero or negative trip distance:")
-print(
-    df.filter(
-        col("trip_distance") <= 0
-    ).count()
-)
+invalid_distance = df.filter(
+    col("trip_distance") <= 0
+).count()
 
-print("Zero or negative passenger count:")
-print(
-    df.filter(
-        col("passenger_count") <= 0
-    ).count()
-)
+invalid_passengers = df.filter(
+    col("passenger_count") <= 0
+).count()
 
-print("Zero or negative fare:")
-print(
-    df.filter(
-        col("fare_amount") <= 0
-    ).count()
-)
+invalid_fare = df.filter(
+    col("fare_amount") <= 0
+).count()
 
-print("Dropoff before pickup:")
-print(
-    df.filter(
-        col("dropoff_datetime") < col("pickup_datetime")
-    ).count()
-)
+invalid_datetime_order = df.filter(
+    col("dropoff_datetime") < col("pickup_datetime")
+).count()
+
+
+print("Null pickup timestamps:", null_pickup)
+print("Null dropoff timestamps:", null_dropoff)
+print("Zero or negative trip distance:", invalid_distance)
+print("Zero or negative passenger count:", invalid_passengers)
+print("Zero or negative fare:", invalid_fare)
+print("Dropoff before pickup:", invalid_datetime_order)
 
 
 # ============================================================
-# 6. TRANSFORMED DATASET INSPECTION
+# 7. INSPECT INVALID TRIP DISTANCES
 # ============================================================
 
-print("=== TRANSFORMED SCHEMA ===")
+print("\n=== RECORDS WITH ZERO OR NEGATIVE TRIP DISTANCE ===")
+
+df.filter(
+    col("trip_distance") <= 0
+).select(
+    "VendorID",
+    "pickup_datetime",
+    "dropoff_datetime",
+    "passenger_count",
+    "trip_distance",
+    "PULocationID",
+    "DOLocationID",
+    "fare_amount",
+    "total_amount"
+).show(20, truncate=False)
+
+
+# ============================================================
+# 8. INSPECT INVALID PASSENGER COUNTS
+# ============================================================
+
+print("\n=== RECORDS WITH ZERO OR NEGATIVE PASSENGER COUNT ===")
+
+df.filter(
+    col("passenger_count") <= 0
+).select(
+    "VendorID",
+    "pickup_datetime",
+    "dropoff_datetime",
+    "passenger_count",
+    "trip_distance",
+    "fare_amount",
+    "total_amount"
+).show(20, truncate=False)
+
+
+# ============================================================
+# 9. INSPECT INVALID FARES
+# ============================================================
+
+print("\n=== RECORDS WITH ZERO OR NEGATIVE FARE ===")
+
+df.filter(
+    col("fare_amount") <= 0
+).select(
+    "VendorID",
+    "pickup_datetime",
+    "dropoff_datetime",
+    "passenger_count",
+    "trip_distance",
+    "fare_amount",
+    "total_amount"
+).show(20, truncate=False)
+
+
+# ============================================================
+# 10. INSPECT INVALID DATETIME ORDER
+# ============================================================
+
+print("\n=== RECORDS WHERE DROPOFF IS BEFORE PICKUP ===")
+
+df.filter(
+    col("dropoff_datetime") < col("pickup_datetime")
+).select(
+    "VendorID",
+    "pickup_datetime",
+    "dropoff_datetime",
+    "passenger_count",
+    "trip_distance",
+    "fare_amount",
+    "total_amount"
+).show(20, truncate=False)
+
+
+# ============================================================
+# 11. DISPLAY TRANSFORMED SCHEMA
+# ============================================================
+
+print("\n=== TRANSFORMED SCHEMA ===")
 df.printSchema()
 
-print("=== TRANSFORMED DATA ===")
-df.show(10, truncate=False)
 
-print("=== RECORD COUNT ===")
+# ============================================================
+# 12. DISPLAY SAMPLE TRANSFORMED DATA
+# ============================================================
+
+print("\n=== TRANSFORMED DATA ===")
+
+df.show(
+    10,
+    truncate=False
+)
+
+
+# ============================================================
+# 13. RECORD COUNT
+# ============================================================
+
+print("\n=== RECORD COUNT ===")
+
 print(df.count())
 
 
 # ============================================================
-# 7. STOP SPARK
+# 14. STOP SPARK
 # ============================================================
 
 spark.stop()
