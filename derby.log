@@ -1,6 +1,6 @@
 ----------------------------------------------------------------
-Sun Oct 11 04:44:49 WAT 2026:
-Booting Derby version The Apache Software Foundation - Apache Derby - 10.16.1.1 - (1901046): instance a816c00e-01a1-2910-310b-000001a36868 
+Sun Oct 11 04:52:35 WAT 2026:
+Booting Derby version The Apache Software Foundation - Apache Derby - 10.16.1.1 - (1901046): instance a816c00e-01a1-2917-4c75-000002d45350 
 on database directory /home/Tam-Davies/Projects/nyc-taxi-spark/metastore_db with class loader jdk.internal.loader.ClassLoaders$AppClassLoader@14dad5dc 
 Loaded from file:/home/Tam-Davies/Projects/nyc-taxi-spark/.venv/lib/python3.14/site-packages/pyspark/jars/derby-10.16.1.1.jar
 java.vendor=Ubuntu
