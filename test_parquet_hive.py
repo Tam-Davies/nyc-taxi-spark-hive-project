@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pyspark.sql import SparkSession
 
 spark = (
@@ -8,6 +10,7 @@ spark = (
     .getOrCreate()
 )
 
+# Create sample data
 data = [
     ("2026-10-01", "Alice", 2.5, 12.50),
     ("2026-10-01", "Bob", 5.2, 22.00),
@@ -16,26 +19,32 @@ data = [
 
 columns = ["trip_date", "passenger", "distance", "fare"]
 
+# Create DataFrame
 df = spark.createDataFrame(data, columns)
 
 print("Original DataFrame:")
 df.show()
 
-# Write the actual data as Parquet
-output_path = "data/processed/test_trips"
+# Use an absolute path for the Parquet dataset
+output_path = Path("data/processed/test_trips").resolve()
 
-df.write.mode("overwrite").parquet(output_path)
+# Write DataFrame to Parquet
+df.write.mode("overwrite").parquet(str(output_path))
 
 print("Parquet files written to:")
 print(output_path)
 
-# Register the Parquet data as a Hive table
+# Create Hive database
 spark.sql("CREATE DATABASE IF NOT EXISTS taxi")
 
-spark.sql("""
-    CREATE TABLE IF NOT EXISTS taxi.test_trips
+# Remove the test table if it already exists
+spark.sql("DROP TABLE IF EXISTS taxi.test_trips")
+
+# Register the existing Parquet dataset as a Hive table
+spark.sql(f"""
+    CREATE TABLE taxi.test_trips
     USING PARQUET
-    LOCATION 'data/processed/test_trips'
+    LOCATION '{output_path}'
 """)
 
 print("Hive table:")
