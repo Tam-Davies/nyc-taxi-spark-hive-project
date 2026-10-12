@@ -24,18 +24,14 @@ df = spark.read.parquet(str(data_path))
 print("=== DETECTED SCHEMA ===")
 df.printSchema()
 
-print("=== SAMPLE DATA ===")
-df.show(5, truncate=False)
-
-# Register the existing Parquet dataset as a Hive table.
+# Register the existing DataFrame as a temporary view.
 df.createOrReplaceTempView("partitioned_trips_view")
 
-spark.sql("""
+# Create an external Hive table pointing to the existing data.
+spark.sql(f"""
     CREATE TABLE taxi.partitioned_trips
     USING PARQUET
-    AS
-    SELECT *
-    FROM partitioned_trips_view
+    LOCATION '{data_path}'
 """)
 
 print("=== TABLES IN TAXI DATABASE ===")
