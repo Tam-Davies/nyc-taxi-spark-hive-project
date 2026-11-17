@@ -1,0 +1,431 @@
+FOOTBALL DATA ETL PROJECT
+WEEKEND DATA UPDATE — LOW-RAM RUNBOOK
+
+PURPOSE
+-------
+Run the Football Data ETL batch pipeline over the weekend to fetch
+new football data, process it, update Silver and Gold, verify the
+results, and shut down heavy services afterward.
+
+PROJECT FLOW
+------------
+Football API
+    |
+    v
+Python Producer
+    |
+    v
+Kafka
+    |
+    v
+Spark Bronze (Delta Lake)
+    |
+    v
+Spark Silver
+    |
+    v
+PostgreSQL
+    |
+    v
+Spark Gold
+    |
+    v
+Grafana
+
+IMPORTANT RAM STRATEGY
+----------------------
+Your local environment has limited RAM. The Spark worker is
+configured around:
+
+    1 worker core
+    768 MB worker memory
+
+Therefore DO NOT run all Spark stages simultaneously.
+
+Use:
+
+    Producer
+       |
+       v
+    Bronze
+       |
+    STOP BRONZE
+       |
+       v
+    Silver
+       |
+    STOP SILVER
+       |
+       v
+    Gold
+
+Airflow does not need to remain running for this manual weekend
+batch update.
+
+============================================================
+STEP 1 — OPEN WSL AND ENTER THE PROJECT
+============================================================
+
+Open Ubuntu/WSL:
+
+    wsl -d Ubuntu
+
+Then:
+
+    cd /home/Tam-Davies/DataEngineering/Projects/Football-Data-ETL-Project
+
+============================================================
+STEP 2 — CHECK RAM
+============================================================
+
+Run:
+
+    free -h
+
+Then:
+
+    docker stats --no-stream
+
+If Docker Desktop is not running, start Docker Desktop first.
+
+Do not start the entire Compose stack blindly.
+
+============================================================
+STEP 3 — START POSTGRES AND KAFKA
+============================================================
+
+Run:
+
+    docker compose up -d postgres kafka
+
+Check:
+
+    docker compose ps
+
+PostgreSQL contains:
+
+    silver.match_events
+    gold.match_summary
+
+Kafka is the ingestion layer.
+
+Do NOT start Airflow at this point.
+
+============================================================
+STEP 4 — START SPARK
+============================================================
+
+Run:
+
+    docker compose up -d spark-master spark-worker
+
+Check:
+
+    docker compose ps
+
+Then:
+
+    docker compose logs --tail=30 spark-worker
+
+The worker should register with the Spark master.
+
+============================================================
+STEP 5 — RUN THE FOOTBALL API PRODUCER
+============================================================
+
+Run the producer in the foreground:
+
+    docker compose up producer
+
+Do NOT use -d.
+
+The producer retrieves football data from the API and publishes
+records to Kafka.
+
+Watch the terminal and confirm records are being published.
+
+When it finishes:
+
+    docker compose rm -f producer
+
+The producer does not need to remain running.
+
+============================================================
+STEP 6 — RUN BRONZE
+============================================================
+
+Run:
+
+    docker compose exec spark-master       /opt/spark/bin/spark-submit       --master spark://spark-master:7077       --driver-memory 512m       --executor-memory 450m       --executor-cores 1       /opt/src/football_etl/spark/bronze_ingest.py
+
+Bronze consumes Kafka records and writes them to the Delta Lake
+Bronze layer.
+
+Let it process the newly available records.
+
+When Bronze has caught up, STOP it:
+
+    docker compose exec spark-master pkill -f 'bronze_ingest.py'
+
+Then check:
+
+    docker compose logs --tail=30 spark-worker
+
+Stopping Bronze releases the Spark executor and the worker's
+only available core for Silver.
+
+============================================================
+STEP 7 — RUN SILVER
+============================================================
+
+Run:
+
+    docker compose exec spark-master       /opt/spark/bin/spark-submit       --master spark://spark-master:7077       --packages org.postgresql:postgresql:42.7.3       --driver-memory 512m       --executor-memory 450m       --executor-cores 1       /opt/src/football_etl/spark/silver_transform.py
+
+Silver reads Bronze, parses/transforms the match data, performs
+feature engineering, and writes to:
+
+    silver.match_events
+
+When Silver has finished processing the new data:
+
+    docker compose exec spark-master pkill -f 'silver_transform.py'
+
+Then:
+
+    docker compose logs --tail=30 spark-worker
+
+============================================================
+STEP 8 — VERIFY SILVER
+============================================================
+
+Check the total number of records:
+
+    docker compose exec postgres       psql -U postgres -d football_db       -c "SELECT COUNT(*) FROM silver.match_events;"
+
+The previously verified count was:
+
+    7600
+
+After a successful weekend update, the count may be higher.
+Do not assume the new number; query the database.
+
+Check the newest matches:
+
+    docker compose exec postgres       psql -U postgres -d football_db       -c "
+      SELECT *
+      FROM silver.match_events
+      ORDER BY match_date DESC
+      LIMIT 10;
+      "
+
+============================================================
+STEP 9 — RUN GOLD
+============================================================
+
+Run:
+
+    docker compose exec spark-master       /opt/spark/bin/spark-submit       --master spark://spark-master:7077       --packages org.postgresql:postgresql:42.7.3       --driver-memory 512m       --executor-memory 450m       --executor-cores 1       /opt/src/football_etl/spark/gold_aggregate.py
+
+Gold aggregates Silver into team-level statistics:
+
+    team
+    matches_played
+    total_wins
+    total_losses
+    total_draws
+    total_points
+    avg_match_goals
+    avg_goal_difference
+
+Output table:
+
+    gold.match_summary
+
+============================================================
+STEP 10 — VERIFY GOLD
+============================================================
+
+Run:
+
+    docker compose exec postgres       psql -U postgres -d football_db       -c "
+      SELECT *
+      FROM gold.match_summary
+      ORDER BY total_points DESC
+      LIMIT 10;
+      "
+
+============================================================
+STEP 11 — CHECK GRAFANA
+============================================================
+
+Open:
+
+    http://localhost:3000
+
+The Grafana PostgreSQL datasource should use:
+
+    Host: postgres:5432
+    Database: football_db
+
+NOT:
+
+    localhost:5432
+
+Example league-table query:
+
+    SELECT
+        team,
+        total_points,
+        total_wins,
+        total_losses,
+        total_draws
+    FROM gold.match_summary
+    ORDER BY total_points DESC;
+
+============================================================
+STEP 12 — SHUT DOWN AFTER THE UPDATE
+============================================================
+
+Stop Spark:
+
+    docker compose stop spark-worker spark-master
+
+If you no longer need Kafka, PostgreSQL or Grafana:
+
+    docker compose stop kafka postgres grafana
+
+This prevents the project from consuming RAM after the batch
+update is complete.
+
+============================================================
+WHY AIRFLOW IS NOT REQUIRED FOR THIS RUN
+============================================================
+
+Airflow is part of Project One, but it does not need to stay
+running during this manual low-RAM weekend update.
+
+Project One is now intentionally treated as a BATCH project.
+
+The resource-safe workflow is:
+
+    Fetch
+      |
+      v
+    Bronze
+      |
+      v
+    STOP
+      |
+      v
+    Silver
+      |
+      v
+    STOP
+      |
+      v
+    Gold
+      |
+      v
+    Verify
+      |
+      v
+    Shutdown
+
+============================================================
+COMPLETE WEEKEND CHECKLIST
+============================================================
+
+[ ] Open WSL
+[ ] Enter project directory
+[ ] Check RAM
+[ ] Start PostgreSQL
+[ ] Start Kafka
+[ ] Start Spark master
+[ ] Start Spark worker
+[ ] Run API producer
+[ ] Confirm Kafka publishing
+[ ] Remove producer container
+[ ] Run Bronze
+[ ] Stop Bronze
+[ ] Run Silver
+[ ] Stop Silver
+[ ] Check Silver record count
+[ ] Check newest Silver matches
+[ ] Run Gold
+[ ] Check Gold results
+[ ] Open Grafana
+[ ] Stop Spark
+[ ] Stop remaining services if finished
+
+============================================================
+IMPORTANT RESOURCE RULES
+============================================================
+
+1. Check RAM before starting.
+2. Do not run Bronze and Silver simultaneously.
+3. Do not run multiple Spark jobs simultaneously.
+4. Use the tested 512 MB driver / 450 MB executor settings.
+5. Keep Airflow stopped during this manual update.
+6. Stop services when finished.
+7. Keep internal PostgreSQL settings as:
+
+       DB_HOST=postgres
+       DB_PORT=5432
+
+8. The host-side PostgreSQL mapping is separate from the internal
+   Docker connection.
+
+============================================================
+FINAL PROJECT ARCHITECTURE
+============================================================
+
+Football API
+     |
+     v
+Python Producer
+     |
+     v
+Kafka
+     |
+     v
+Spark Bronze
+     |
+     v
+Delta Lake
+     |
+     v
+Spark Silver
+     |
+     v
+PostgreSQL
+     |
+     v
+Spark Gold
+     |
+     v
+PostgreSQL
+     |
+     v
+Grafana
+
+PROJECT 1 STATUS
+----------------
+Football Data Engineering Batch Pipeline
+
+The purpose of this weekend procedure is:
+
+    Fetch new football data
+          ->
+    Process new records
+          ->
+    Update Silver
+          ->
+    Recalculate Gold
+          ->
+    Verify
+          ->
+    Shut down
+
+This keeps Project One useful while respecting the laptop's
+limited RAM.

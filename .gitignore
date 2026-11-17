@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Spark runtime files
+derby.log
+metastore_db/
+spark-warehouse/
+
+# Local datasets
+data/
+
+# OS files
+*:Zone.Identifier
