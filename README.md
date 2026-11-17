@@ -21,17 +21,21 @@ Spark SQL
 ↓
 Analytical Results
 
+
 ## Technologies
 
 - Python 3.14.4
 - Apache Spark 4.2.0
 - PySpark
+- Delta Lake 4.4.1
+- delta-spark
 - Hive catalog/metastore support
 - Spark SQL
 - Parquet
 - Pytest 9.1.1
 - WSL Ubuntu
 - Java / OpenJDK
+
 
 ## Project Structure
 
@@ -40,11 +44,16 @@ nyc-taxi-spark/
 ├── data/
 │   ├── raw/
 │   │   └── 2017.csv
-│   └── processed/
-│       ├── clean_trips/
-│       ├── partitioned_trips/
-│       ├── monthly_summary/
-│       └── test_trips/
+│   ├── processed/
+│   │   ├── clean_trips/
+│   │   ├── partitioned_trips/
+│   │   ├── monthly_summary/
+│   │   └── test_trips/
+│   └── delta/
+│       ├── nyc_taxi_trips/
+│       ├── test_table/
+│       ├── delete_test/
+│       └── merge_test/
 ├── jobs/
 │   ├── ingest.py
 │   ├── transform.py
@@ -54,15 +63,30 @@ nyc-taxi-spark/
 │   ├── aggregate.py
 │   ├── register_gold.py
 │   ├── run_analysis.py
-│   └── spark_ui_demo.py
+│   ├── spark_ui_demo.py
+│   ├── delta_spark_session.py
+│   ├── convert_parquet_to_delta.py
+│   ├── inspect_delta_history.py
+│   ├── inspect_taxi_records.py
+│   ├── update_delta_records.py
+│   ├── test_delta_session.py
+│   ├── test_delta_transactions.py
+│   ├── test_delta_time_travel.py
+│   ├── create_delta_delete_test.py
+│   ├── test_delta_delete.py
+│   ├── inspect_delete_history.py
+│   ├── create_delta_merge_test.py
+│   ├── test_delta_merge.py
+│   └── benchmark_delta_performance.py
+├── docs/
+│   └── benchmark-results.md
 ├── sql/
 │   └── analysis.sql
 ├── tests/
 │   └── test_pipeline.py
-├── .venv/
 ├── requirements.txt
+├── .gitignore
 └── README.md
-```
 
 ## Dataset
 
@@ -127,6 +151,114 @@ CSV → Spark DataFrame → Parquet
 ```
 
 Parquet provides columnar storage suitable for analytical workloads.
+
+## Delta Lake Implementation
+
+The existing partitioned Parquet dataset was extended with Delta Lake to introduce transactional storage capabilities while preserving the original Parquet data.
+
+## Delta Lake vs Parquet Performance
+
+A local benchmark was conducted to compare the read performance and storage requirements of the partitioned Parquet dataset and its Delta Lake equivalent.
+
+### Storage Comparison
+
+| Dataset | Storage Size |
+|---|---:|
+| Partitioned Parquet | 784 KB |
+| Delta Lake | 924 KB |
+| Delta transaction log | 76 KB |
+
+Delta Lake occupied approximately **17.9% more storage** than Parquet.
+
+### Full-Table Read Performance
+
+| Run | Parquet (s) | Delta Lake (s) |
+|---|---:|---:|
+| 1 | 7.4951 | 16.3268 |
+| 2 | 9.3680 | 21.2295 |
+
+Both formats returned 22,502 records.
+
+### Filtered Query Performance
+
+The benchmark filtered records for October 2017.
+
+| Run | Parquet (s) | Delta Lake (s) |
+|---|---:|---:|
+| 1 | 1.6900 | 4.3352 |
+| 2 | 2.1276 | 5.3321 |
+
+Both formats returned 2,007 records.
+
+### Partition Pruning
+
+Spark's formatted physical execution plans confirmed partition pruning for both formats.
+
+Both datasets applied the following filters:
+
+- `pickup_year = 2017`
+- `pickup_month = 10`
+
+### Findings
+
+Parquet performed faster in the two initial local benchmark runs. Delta Lake introduced additional transaction and metadata processing overhead, which was noticeable with this relatively small dataset.
+
+However, Delta Lake provided additional transactional capabilities, including ACID operations, transaction history, UPDATE, DELETE, MERGE, and time travel.
+
+These measurements are initial observations, not statistically conclusive performance results.
+
+**Detailed results:** `docs/benchmark-results.md`
+
+### Parquet-to-Delta Conversion
+
+The partitioned Parquet dataset was converted into a Delta Lake table:
+
+```text
+data/processed/partitioned_trips
+              ↓
+       Delta Lake
+              ↓
+data/delta/nyc_taxi_trips
+```
+
+Conversion results:
+
+- Source Parquet records: **22,502**
+- Delta Lake records: **22,502**
+- Monthly partitions: **12**
+- Delta table columns: **19**
+
+The original Parquet dataset remains unchanged.
+
+### Delta Transaction Log
+
+Delta Lake maintains transaction history in:
+
+```text
+data/delta/nyc_taxi_trips/_delta_log/
+```
+
+The transaction log records table changes and supports version management, consistency, and time travel.
+
+### ACID Operations
+
+The implementation demonstrates the following Delta Lake operations:
+
+- **UPDATE:** Modified a record's `fare_amount` in the main Delta table.
+- **DELETE:** Deleted a selected record from a separate test table.
+- **MERGE:** Updated an existing record and inserted a new record using a separate test table.
+
+### Time Travel
+
+Delta Lake time travel was tested by reading previous table versions.
+
+The main table's Version 0 and Version 1 were compared to verify that the original and updated fare amounts could both be retrieved.
+
+The DELETE test also confirmed that the deleted record remained available when querying Version 0.
+
+### Implementation Scripts
+
+The Delta Lake implementation is supported by scripts in the `jobs/` directory, covering session configuration, conversion, transaction operations, history inspection, time travel, and performance benchmarking.
 
 ## Data Partitioning
 
